@@ -2,6 +2,8 @@
 
 import threading
 import time
+import csv
+import os
 from typing import List, Tuple, Optional
 from config import TOKEN_HOLD_MIN, TOKEN_TIMEOUT, DEBUG_MODE, VERBOSITY_LEVEL
 from utils import (
@@ -36,6 +38,18 @@ class TokenRingNode:
         self.is_token_origin = (self.id == min(self.ring_table))
         self.sock = create_udp_socket(self.ip, self.port)
         self.data_recv: Optional[DataReceive] = None
+
+        self.log_file = f"node{self.id}_log.csv"
+        if not os.path.exists(self.log_file):
+            with open(self.log_file, "w", newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["timestamp", "event", "details"])
+
+    def log_csv(self, event: str, details: str):
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(self.log_file, "a", newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([timestamp, event, details])
 
     def _debug_log(self, message: str) -> None:
         if DEBUG_MODE:
@@ -77,7 +91,6 @@ class TokenRingNode:
         if msg_type == DATA_HEADER:
             header = unpack_data_header(msg)
             if VERBOSITY_LEVEL == 1:
-                # Only print minimal info at level 1
                 self.data_recv = DataReceive(
                     origin=header["origin"],
                     seq=header["seq"],
@@ -103,6 +116,7 @@ class TokenRingNode:
             if self.data_recv:
                 d = self.data_recv
                 payload = b''.join(d.chunks)[:d.length]
+                self.log_csv("DATA_RECEIVED", f"from Node{d.origin} to Node{d.dst} data={payload!r}")
                 if VERBOSITY_LEVEL == 1:
                     print(f"Data received: from Node{d.origin} to Node{d.dst} : {payload!r}")
                 else:
@@ -127,6 +141,7 @@ class TokenRingNode:
         self._log(f"TOKEN seq={seq} origin={origin} dst={dst} received")
         if dst == self.id:
             self._debug_log("token is for me, setting event")
+            self.log_csv("TOKEN_RECEIVED", f"seq={seq} from Node{origin}")
             self.token_event.set()
 
     def _logic(self) -> None:
@@ -150,7 +165,6 @@ class TokenRingNode:
                         self._create_token()
 
     def broadcast_data(self, data: bytes):
-        """Send data to all nodes in the ring except self (broadcast)."""
         for node_id in self.ring_table:
             if node_id != self.id:
                 self.send_data(dst=node_id, data=data)
@@ -158,12 +172,9 @@ class TokenRingNode:
     def _handle_my_token(self) -> None:
         self._debug_log("handling my token")
         time.sleep(TOKEN_HOLD_MIN)
-        # Example: broadcast data to all nodes
-        test_data = b'2323232323'
-        # self.broadcast_data(test_data)
-        self.send_data(dst=2, data=b'Hello NODE2')
-        self.send_data(dst=3, data=b'Hello Node2')
-
+        if self.id == 1:
+            self.send_data(dst=2, data=b'Hello Node2')
+            self.send_data(dst=3, data=b'Hello Node3')
         self._forward_token()
 
     def _forward_token(self) -> None:
@@ -172,6 +183,7 @@ class TokenRingNode:
         self._debug_log(f"forwarding token to node {next_node} with seq {self.my_seq}")
         token_data = pack_token(self.id, self.my_seq, next_node)
         send_udp(self.sock, token_data, self.rf_addr)
+        self.log_csv("TOKEN_SENT", f"seq={self.my_seq} to Node{next_node}")
         self._log(f"TOKEN forwarded to node{next_node} (seq={self.my_seq})")
 
     def _create_token(self) -> None:
@@ -184,12 +196,14 @@ class TokenRingNode:
         token_data = pack_token(self.id, self.my_seq, next_node)
         send_udp(self.sock, token_data, self.rf_addr)
         self.last_token_time = time.time()
+        self.log_csv("TOKEN_SENT", f"seq={self.my_seq} to Node{next_node}")
         self._log(f"TOKEN created for node{next_node} (seq={self.my_seq})")
 
     def send_data(self, dst: int, data: bytes):
         seq = (self.my_seq + 1)
         origin = self.id
         total_len = len(data)
+        self.log_csv("DATA_SENT", f"to Node{dst} seq={seq} data={data!r}")
         self._log(f"Sending {total_len} bytes data to Node{dst}")
         header = pack_data_header(origin, seq, dst, total_len)
         send_udp(self.sock, header, self.rf_addr)
