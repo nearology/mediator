@@ -3,7 +3,7 @@
 import threading
 import time
 from typing import List, Tuple, Optional
-from config import TOKEN_HOLD_MIN, TOKEN_TIMEOUT, DEBUG_MODE
+from config import TOKEN_HOLD_MIN, TOKEN_TIMEOUT, DEBUG_MODE, VERBOSITY_LEVEL
 from utils import (
     pack_data_header, pack_data_chunk, pack_data_end, pack_token,
     unpack_token, unpack_data_header, unpack_data_chunk, unpack_data_end,
@@ -42,9 +42,10 @@ class TokenRingNode:
             timestamp = time.strftime("%H:%M:%S")
             print(f"[DEBUG {timestamp}] Node{self.id}: {message}")
 
-    def _log(self, message: str) -> None:
-        timestamp = time.strftime("%H:%M:%S")
-        print(f"[{timestamp}] Node{self.id}: {message}")
+    def _log(self, message: str, level: int = 2) -> None:
+        if VERBOSITY_LEVEL >= level:
+            timestamp = time.strftime("%H:%M:%S")
+            print(f"[{timestamp}] Node{self.id}: {message}")
 
     def _receiver(self) -> None:
         self._debug_log("_receiver thread started")
@@ -75,25 +76,38 @@ class TokenRingNode:
             return
         if msg_type == DATA_HEADER:
             header = unpack_data_header(msg)
-            self._log(f"Received DATA_HEADER from Node{header['origin']} (seq={header['seq']}), DLEN={header['total_len']}")
-            self.data_recv = DataReceive(
-                origin=header["origin"],
-                seq=header["seq"],
-                dst=header["dst"],
-                length=header["total_len"],
-                chunks=[]
-            )
+            if VERBOSITY_LEVEL == 1:
+                # Only print minimal info at level 1
+                self.data_recv = DataReceive(
+                    origin=header["origin"],
+                    seq=header["seq"],
+                    dst=header["dst"],
+                    length=header["total_len"],
+                    chunks=[]
+                )
+            else:
+                self._log(f"Received DATA_HEADER from Node{header['origin']} (seq={header['seq']}), DLEN={header['total_len']}", level=2)
+                self.data_recv = DataReceive(
+                    origin=header["origin"],
+                    seq=header["seq"],
+                    dst=header["dst"],
+                    length=header["total_len"],
+                    chunks=[]
+                )
         elif msg_type == DATA_CHUNK:
             chunk = unpack_data_chunk(msg)
             if self.data_recv:
                 self.data_recv.chunks.append(chunk["data"])
         elif msg_type == DATA_END:
             end = unpack_data_end(msg)
-            self._log("Received DATA_END!")
             if self.data_recv:
                 d = self.data_recv
                 payload = b''.join(d.chunks)[:d.length]
-                self._log(f"==> Data received from Node{d.origin}, Seq={d.seq} : {payload!r}")
+                if VERBOSITY_LEVEL == 1:
+                    print(f"Data received: from Node{d.origin} to Node{d.dst} : {payload!r}")
+                else:
+                    self._log("Received DATA_END!", level=2)
+                    self._log(f"==> Data received from Node{d.origin}, Seq={d.seq} : {payload!r}", level=2)
             self.data_recv = None
 
     def _process_token(self, token: dict) -> None:
@@ -135,11 +149,21 @@ class TokenRingNode:
                         self._debug_log(f"token timeout ({time_since_last:.1f}s), regenerating")
                         self._create_token()
 
+    def broadcast_data(self, data: bytes):
+        """Send data to all nodes in the ring except self (broadcast)."""
+        for node_id in self.ring_table:
+            if node_id != self.id:
+                self.send_data(dst=node_id, data=data)
+
     def _handle_my_token(self) -> None:
         self._debug_log("handling my token")
         time.sleep(TOKEN_HOLD_MIN)
-        test_data = b'1111111'
-        self.send_data(dst=2, data=test_data)
+        # Example: broadcast data to all nodes
+        test_data = b'2323232323'
+        # self.broadcast_data(test_data)
+        self.send_data(dst=2, data=b'Hello NODE2')
+        self.send_data(dst=3, data=b'Hello Node2')
+
         self._forward_token()
 
     def _forward_token(self) -> None:

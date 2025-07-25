@@ -9,3 +9,5 @@ DATA_HEADER = 0x10
 DATA_CHUNK = 0x11
 DATA_END = 0x12
 DATA_CHUNK_SIZE = 7 
+
+VERBOSITY_LEVEL = 1  # 1: minimal, 2: normal, 3: debug 
